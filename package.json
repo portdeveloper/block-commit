@@ -1,6 +1,14 @@
 {
   "name": "block-commit",
   "displayName": "block-commit",
+  "publisher": "portdev",
+  "keywords": [
+    "block",
+    "commit",
+    "git",
+    "block-commit",
+    "to-do"
+  ],
   "description": "an extension that blocks commits until @block-commit comments are all removed",
   "version": "0.0.1",
   "engines": {
