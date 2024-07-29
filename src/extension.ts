@@ -5,6 +5,7 @@ import * as path from 'path';
 let outputChannel: vscode.OutputChannel;
 let blockCommitSourceControl: vscode.SourceControl;
 let blockCommitResourceGroup: vscode.SourceControlResourceGroup;
+let blockCommitDecorationType: vscode.TextEditorDecorationType;
 
 export function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel("Block Commit");
@@ -27,6 +28,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// Hide the input box
 	blockCommitSourceControl.inputBox.visible = false;
 
+	// Create a decoration type for @block-commit
+	blockCommitDecorationType = vscode.window.createTextEditorDecorationType({
+		color: new vscode.ThemeColor('errorForeground'),
+		fontWeight: 'bold'
+	});
+
 	git.onDidOpenRepository(repo => {
 		setupGitListeners(repo);
 	});
@@ -43,7 +50,23 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.commands.executeCommand('git.commit');
 		}
 	}));
+
+	// Register an event listener for text document changes
+	context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
+		const openEditor = vscode.window.visibleTextEditors.find(editor => editor.document === event.document);
+		if (openEditor) {
+			updateDecorations(openEditor);
+		}
+	}));
+
+	// Register an event listener for active editor changes
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+		if (editor) {
+			updateDecorations(editor);
+		}
+	}));
 }
+
 function setupGitListeners(repo: Repository) {
 	if (repo.state && typeof repo.state.onDidChange === 'function') {
 		repo.state.onDidChange(() => {
@@ -53,6 +76,22 @@ function setupGitListeners(repo: Repository) {
 	} else {
 		outputChannel.appendLine(`Warning: Unable to set up listeners for repository: ${repo.rootUri.fsPath}`);
 	}
+}
+
+function updateDecorations(editor: vscode.TextEditor) {
+	const text = editor.document.getText();
+	const blockCommitRegex = /@block-commit/g;
+	const decorations: vscode.DecorationOptions[] = [];
+
+	let match;
+	while ((match = blockCommitRegex.exec(text))) {
+		const startPos = editor.document.positionAt(match.index);
+		const endPos = editor.document.positionAt(match.index + match[0].length);
+		const decoration = { range: new vscode.Range(startPos, endPos) };
+		decorations.push(decoration);
+	}
+
+	editor.setDecorations(blockCommitDecorationType, decorations);
 }
 
 async function checkForBlockingComments(repo: Repository) {
@@ -85,8 +124,8 @@ async function checkForBlockingComments(repo: Repository) {
 								arguments: [uri, { selection: range }]
 							},
 							decorations: {
-								strikeThrough: true,
-								tooltip: '@block-commit found'
+								tooltip: '@block-commit found',
+								iconPath: new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground'))
 							}
 						});
 					}
@@ -103,6 +142,10 @@ async function checkForBlockingComments(repo: Repository) {
 		} else {
 			outputChannel.appendLine('No blocking comments found. Commit allowed.');
 		}
+
+		vscode.window.visibleTextEditors.forEach(editor => {
+			updateDecorations(editor);
+		});
 	} catch (error) {
 		outputChannel.appendLine(`Error checking for blocking comments: ${error}`);
 	}
@@ -126,4 +169,5 @@ function parseGitDiff(diffOutput: string): string[] {
 
 export function deactivate() {
 	outputChannel.dispose();
+	blockCommitDecorationType.dispose();
 }
