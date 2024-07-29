@@ -3,8 +3,8 @@ import { GitExtension, API, Repository } from '../types/git';
 import * as path from 'path';
 
 let outputChannel: vscode.OutputChannel;
-let isCommitBlocked = false;
-let scmInputBox: vscode.SourceControlInputBox | undefined;
+let blockCommitSourceControl: vscode.SourceControl;
+let blockCommitResourceGroup: vscode.SourceControlResourceGroup;
 
 export function activate(context: vscode.ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel("Block Commit");
@@ -21,8 +21,11 @@ export function activate(context: vscode.ExtensionContext) {
 	outputChannel.appendLine('Git Extension loaded');
 
 	// Create a custom Source Control
-	const blockCommitSourceControl = vscode.scm.createSourceControl('blockCommit', 'Block Commit');
-	scmInputBox = blockCommitSourceControl.inputBox;
+	blockCommitSourceControl = vscode.scm.createSourceControl('blockCommit', 'Block Commit');
+	blockCommitResourceGroup = blockCommitSourceControl.createResourceGroup('blockCommit', 'Block Commit Comments');
+
+	// Hide the input box
+	blockCommitSourceControl.inputBox.visible = false;
 
 	git.onDidOpenRepository(repo => {
 		setupGitListeners(repo);
@@ -34,14 +37,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register a command to force commit (for testing purposes)
 	context.subscriptions.push(vscode.commands.registerCommand('extension.forceCommit', () => {
-		if (isCommitBlocked) {
+		if (blockCommitResourceGroup.resourceStates.length > 0) {
 			vscode.window.showErrorMessage('Commit is blocked. Please remove @block-commit comments before committing.');
 		} else {
 			vscode.commands.executeCommand('git.commit');
 		}
 	}));
 }
-
 function setupGitListeners(repo: Repository) {
 	if (repo.state && typeof repo.state.onDidChange === 'function') {
 		repo.state.onDidChange(() => {
@@ -63,7 +65,7 @@ async function checkForBlockingComments(repo: Repository) {
 		const changedFiles = parseGitDiff(diffOutput);
 		outputChannel.appendLine(`Number of changed files: ${changedFiles.length}`);
 
-		isCommitBlocked = false;
+		const blockingComments: vscode.SourceControlResourceState[] = [];
 
 		for (const file of changedFiles) {
 			try {
@@ -71,31 +73,38 @@ async function checkForBlockingComments(repo: Repository) {
 				const document = await vscode.workspace.openTextDocument(uri);
 				const text = document.getText();
 
-				if (text.includes('@block-commit')) {
-					const message = `Commit blocked: @block-commit comment found in ${file}`;
-					vscode.window.showErrorMessage(message);
-					outputChannel.appendLine(message);
-					isCommitBlocked = true;
-					updateSCMInputBox(message);
-					return;
+				const lines = text.split('\n');
+				for (let i = 0; i < lines.length; i++) {
+					if (lines[i].includes('@block-commit')) {
+						const range = new vscode.Range(i, 0, i, lines[i].length);
+						blockingComments.push({
+							resourceUri: uri,
+							command: {
+								title: "Show Block Commit",
+								command: "vscode.open",
+								arguments: [uri, { selection: range }]
+							},
+							decorations: {
+								strikeThrough: true,
+								tooltip: '@block-commit found'
+							}
+						});
+					}
 				}
 			} catch (error) {
 				outputChannel.appendLine(`Error reading file ${file}: ${error}`);
 			}
 		}
 
-		if (!isCommitBlocked) {
-			updateSCMInputBox('');
+		blockCommitResourceGroup.resourceStates = blockingComments;
+
+		if (blockingComments.length > 0) {
+			vscode.window.showWarningMessage(`Found ${blockingComments.length} @block-commit comment(s). Commit is blocked.`);
+		} else {
 			outputChannel.appendLine('No blocking comments found. Commit allowed.');
 		}
 	} catch (error) {
 		outputChannel.appendLine(`Error checking for blocking comments: ${error}`);
-	}
-}
-
-function updateSCMInputBox(message: string) {
-	if (scmInputBox) {
-		scmInputBox.value = message;
 	}
 }
 
